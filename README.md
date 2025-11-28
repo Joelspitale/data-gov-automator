@@ -93,3 +93,7 @@ graph TD
     * `03_demo_business_schema.sql`: Base de datos "dummy" para probar el sistema.
     * `04_demo_business_data.sql`: Datos a cargar en modelo de negocio.
 * `docker-compose.yml`: Definición de servicios.
+
+## Proximos Pasos:
+* `/Calidad`: Implementar un Generador Automático de Reglas de Calidad | Detección de Anomalías Semánticas
+* `/Notificaciones y Sugerencias de Corrección`: Implementar un Generador Automático de Reglas de Calidad | Detección de Anomalías Semánticas
