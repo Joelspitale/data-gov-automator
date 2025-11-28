@@ -1,3 +1,5 @@
+Markdown
+
 # 🛡️ Data Governance & PII Automator
 
 ![n8n Version](https://img.shields.io/badge/n8n-1.118.0-FF6B6B?style=for-the-badge&logo=n8n)
@@ -36,3 +38,64 @@ graph TD
     G --> M[Actualizar Catálogo]
     L --> M
     M --> N[Generar Vistas Encriptadas]
+🚀 Características Principales
+Orquestador Inteligente (n8n): Monitorea la base de datos buscando tablas creadas hace más de 10 días que no han sido auditadas.
+
+Clasificación Híbrida: Combina reglas SQL rápidas con la inferencia semántica de Google Gemini 1.5 Flash.
+
+Protección de Datos: Genera vistas de base de datos donde los campos sensibles son automáticamente ofuscados (SHA256, Máscaras) según su nivel de sensibilidad.
+
+Infraestructura como Código: Despliegue completo con Docker Compose. Incluye datos semilla y un entorno de "empresa ficticia" para pruebas.
+
+🛠️ Instalación y Despliegue
+Prerrequisitos
+Docker y Docker Compose
+
+Una API Key de Google AI Studio
+
+Paso a Paso
+Clonar el repositorio
+
+Bash
+
+git clone [https://github.com/Joelspitale/data-gov-automator.git](https://github.com/Joelspitale/data-gov-automator.git)
+cd data-gov-automator
+Configurar Variables de Entorno Copia el archivo de ejemplo y configura tu API Key.
+
+Bash
+
+cp .env.example .env
+# Edita el archivo .env y pega tu GOOGLE_GEMINI_API_KEY
+Iniciar Infraestructura
+
+Bash
+
+docker-compose up -d
+Esto levantará MySQL, creará automáticamente el esquema de Gobierno (AR_PROD_HUB_EXT), poblará los datos maestros y generará una base de datos de prueba (AR_PROD_HUB_DIM) con clientes ficticios.
+
+Configurar n8n
+
+Ingresa a http://localhost:5678
+
+Configura tu usuario admin.
+
+Importa los archivos JSON de la carpeta /workflows.
+
+Importante: En las credenciales de n8n, crea una para "Google Gemini" y usa la expresión {{ $env.GOOGLE_GEMINI_API_KEY }}.
+
+📂 Estructura del Proyecto
+/workflows: Lógica de negocio (JSONs de n8n).
+
+Databases.json: Orquestador que busca tablas nuevas.
+
+RegistroAndDeteccion...json: El cerebro que clasifica los datos.
+
+/sql: Scripts de inicialización (se ejecutan automáticamente en orden alfabético).
+
+01_governance_schema.sql: Estructura del catálogo.
+
+02_governance_seeds.sql: Reglas de sensibilidad pre-cargadas.
+
+03_demo_business...: Base de datos "dummy" para probar el sistema.
+
+docker-compose.yml: Definición de servicios.
