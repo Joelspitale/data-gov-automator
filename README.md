@@ -40,7 +40,7 @@ graph TD
 
 ## 🚀 Características Principales
 
-* **Orquestador Inteligente (n8n):** Monitorea la base de datos buscando tablas creadas hace más de 10 días que no han sido auditadas.
+* **Orquestador Inteligente (n8n):** Monitorea la base de datos buscando tablas creadas recientemente sin auditor o que reinspecciona las tablas cada 10 dias para validar si tienen nuevos campos sensibles.
 * **Clasificación Híbrida:** Combina reglas SQL rápidas con la inferencia semántica de **Google Gemini 1.5 Flash**.
 * **Protección de Datos:** Genera vistas de base de datos donde los campos sensibles son automáticamente ofuscados (SHA256, Máscaras) según su nivel de sensibilidad.
 * **Infraestructura como Código:** Despliegue completo con Docker Compose. Incluye datos semilla y un entorno de "empresa ficticia" para pruebas.
