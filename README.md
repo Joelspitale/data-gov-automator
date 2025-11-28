@@ -36,6 +36,7 @@ graph TD
     G --> M[Actualizar Catálogo]
     L --> M
     M --> N[Generar Vistas Encriptadas]
+
 🚀 Características Principales
 Orquestador Inteligente (n8n): Monitorea la base de datos buscando tablas creadas hace más de 10 días que no han sido auditadas.
 
