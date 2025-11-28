@@ -1,0 +1,1217 @@
+{
+  "name": "RegistroAndDeteccionDatosSensbibles",
+  "nodes": [
+    {
+      "parameters": {
+        "jsCode": "// Buscar los valores relevantes entre los items de entrada\nconst promptBase = items.find(item => item.json.prompt_base)?.json.prompt_base;\nconst tabla = items.find(item => item.json.tabla)?.json.tabla;\nconst esquema = items.find(item => item.json.esquema)?.json.esquema;\nconst columnas = items.find(item => item.json.columnas_no_etiquetadas)?.json.columnas_no_etiquetadas;\nconst ejemplos = items.find(item => item.json.ejemplos)?.json.ejemplos;\n\n// 🚫 Si la tabla es undefined, null o cadena vacía, no devolvemos nada\nif (!tabla) {\n  return []; // <-- Esto hace que n8n no pase ningún registro al siguiente nodo\n}\n\n// Armar el prompt final\nconst promptFinal = `\n${promptBase}\n\n---\n\n### Datos para analizar:\n\n**Tabla**: ${tabla}\n**Esquema**: ${esquema}\n**Columnas no etiquetadas**:  \n${JSON.stringify(columnas, null, 2)}\n\n**Ejemplos de registros por columna**:  \n${JSON.stringify(ejemplos, null, 2)}\n`;\n\n// Devolver la salida solo si hay una tabla válida\nreturn [{\n  json: {\n    prompt: promptFinal,\n    tabla1: tabla,\n    esquema: esquema\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6448,
+        128
+      ],
+      "id": "cd78e66c-54e0-41b8-9485-1ef6a7b475cb",
+      "name": "CrearProntSiTengoDatos",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n    TABLE_SCHEMA as ESQUEMA,\n    table_name,\n    create_time\nFROM \n    information_schema.TABLES t\nWHERE \n    table_schema = '{{ $json.database }}'\n    AND UPPER(TRIM(table_name)) = '{{ $json.table }}'\n    AND create_time >= DATE_SUB(NOW(), INTERVAL 14 DAY) \n    and table_name not in (select distinct(tabla_origen) from AR_PROD_HUB_EXT.MAE_CATALOGO_DATOS)\nORDER BY \n    create_time DESC;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        4352,
+        384
+      ],
+      "id": "2728ec86-0d3d-4692-9141-40e6222ac415",
+      "name": "Get Novedades1",
+      "alwaysOutputData": true,
+      "credentials": {
+        "mySql": {
+          "id": "7QI3B35bYFcIbiuu",
+          "name": "DIM"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    c.table_schema,\n    ((c.TABLE_NAME)) as TABLE_NAME,\n    upper(trim(c.COLUMN_NAME)) as COLUMN_NAME,\n    upper(trim(T1.concepto_id))  AS concepto_sensible_detectado,\n    case when T1.concepto_id is null then 0 else 1 end as concepto_detectado_fl\nFROM\n    INFORMATION_SCHEMA.COLUMNS AS c\nLEFT JOIN\n    AR_PROD_HUB_EXT.MAE_CONCEPTO_SENSIBLE AS T1\nON\n    (\n        upper(trim(c.COLUMN_NAME)) = upper(trim(T1.concepto_id))\n        OR upper(trim(c.COLUMN_NAME)) LIKE CONCAT('%', upper(trim(T1.concepto_id)), '%')\n    )\nWHERE\n    upper(trim(c.table_schema)) = upper(trim('{{ $json.ESQUEMA }}')) and upper(trim(c.TABLE_NAME)) = upper(trim('{{ $json.TABLE_NAME }}'))",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        5392,
+        464
+      ],
+      "id": "200b6df3-bfbf-4aca-86a0-a7418e20ce70",
+      "name": "Get Columns Sensibility1",
+      "alwaysOutputData": true,
+      "credentials": {
+        "mySql": {
+          "id": "7QI3B35bYFcIbiuu",
+          "name": "DIM"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "select",
+        "table": {
+          "__rl": true,
+          "value": "={{ $json.ESQUEMA }}.{{ $json.TABLE_NAME }}",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        5408,
+        208
+      ],
+      "id": "c548f662-8504-4ac3-bc07-e1535a3a0e2c",
+      "name": "Muestreo1",
+      "alwaysOutputData": true,
+      "credentials": {
+        "mySql": {
+          "id": "7QI3B35bYFcIbiuu",
+          "name": "DIM"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Obtener todos los items del input\nconst items = $input.all();\n\n// Separar registros de datos y metadata de columnas\nconst registros = items.filter(item => !item.json.hasOwnProperty('COLUMN_NAME'));\nconst metadata = items.filter(item => item.json.hasOwnProperty('COLUMN_NAME'));\n\n// Detectar columnas no etiquetadas\nconst columnasNoEtiquetadas = metadata\n  .filter(col => col.json.concepto_detectado_fl === 0)\n  .map(col => col.json.COLUMN_NAME.toLowerCase()); // Normalizamos\n\n// Extraer ejemplos de esas columnas desde los registros\nconst ejemplos = {};\nfor (const columna of columnasNoEtiquetadas) {\n  ejemplos[columna] = registros.map(reg => reg.json[columna]).filter(val => val !== undefined);\n}\n\n// Obtener nombre de la tabla (asumiendo que todas las columnas pertenecen a la misma tabla)\nconst tabla = metadata[0]?.json.TABLE_NAME || 'DESCONOCIDA';\nconst esquema = metadata[0]?.json.TABLE_SCHEMA || 'DESCONOCIDA';\n\n// Construir el resultado\nconst resultado = {\n  tabla,\n  esquema,\n  columnas_no_etiquetadas: columnasNoEtiquetadas,\n  ejemplos\n};\n\n// ✅ Devolver como array de objetos con propiedad `json`\nreturn [\n  {\n    json: resultado\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6048,
+        304
+      ],
+      "id": "b538d217-2138-4035-baf0-3accf7c428f4",
+      "name": "Code in JavaScript2",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "models/gemini-2.5-flash",
+          "mode": "list",
+          "cachedResultName": "models/gemini-2.5-flash"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "={{ $json.prompt }}"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0,
+          "topP": 1
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1,
+      "position": [
+        7104,
+        128
+      ],
+      "id": "b0479ebd-6303-4253-8b94-54b4c7e23192",
+      "name": "Message a model1",
+      "alwaysOutputData": false,
+      "credentials": {
+        "googlePalmApi": {
+          "id": "SzsVT08z7tmRufwc",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extraer datos del input combinado\nconst conceptos = items\n  .filter(i => i.json.concepto_id)\n  .map(i => i.json.concepto_id.toUpperCase());\n\nconst conceptosDesc = items\n  .filter(i => i.json.concepto_id)\n  .map(i => i.json.nombre_concepto);\n\nconst metodosAnon = items\n  .filter(i => i.json.metodo_anon_id)\n  .map(i => i.json.metodo_anon_id.toUpperCase());\n\nconst sensibilidad = items\n  .filter(i => i.json.sensibilidad_id)\n  .map(i => i.json.sensibilidad_id.toUpperCase());\n\nconst empleados = items\n  .filter(i => i.json.EMPLEADO_ID)\n  .map(i => i.json.EMPLEADO_ID);\n\nconst normativa = \"Ley 25.326 de Protección de Datos Personales (Argentina)\";\n\n// Construcción del prompt mejorado con alias permitidos\nconst promptBase = `\nAnaliza la lista de columnas de una tabla y determina si son **datos sensibles**. \nTu salida debe ser **únicamente un JSON válido** (sin texto adicional, explicaciones ni comentarios).\n\n---\n\n### 🔹 FORMATO DE SALIDA OBLIGATORIO\n[\n  {\n    \"tabla\": \"nombre_tabla\",\n    \"esquema\": \"nombre_esquema\"\n    \"columna\": \"nombre_columna\",\n    \"concepto\": \"concepto_sensible\",\n    \"descripcion_concepto\": \"breve descripción (máx. 40 caracteres)\",\n    \"nuevo_concepto\": true/false,\n    \"sensibilidad\": uno de [${sensibilidad.join(\", \")}],\n    \"usuario_creador\": número dentro de [${empleados.join(\", \")}],\n    \"metodo_anonimizacion\": uno de [${metodosAnon.join(\", \")}],\n    \"normativa\": \"${normativa}\"\n  }\n]\n\n---\n\n### 🔹 EJEMPLO\n[\n  {\n    \"tabla\": \"clientes\",\n    \"esquema\": \"ar_prod_hub_dim\",\n    \"columna\": \"dni\",\n    \"concepto\": \"DNI\",\n    \"descripcion_concepto\": \"Documento Nacional de Identidad\",\n    \"nuevo_concepto\": false,\n    \"sensibilidad\": \"PII_ALTA\",\n    \"usuario_creador\": 101,\n    \"metodo_anonimizacion\": \"HASH_MD5\",\n    \"normativa\": \"${normativa}\"\n  }\n]\n\n---\n\n### 🔹 EQUIVALENCIAS PERMITIDAS (NO marcar como nuevo_concepto)\n- \"PASAPORTE\" se considera equivalente a \"DNI\" (identificador personal).\n- \"DOCUMENTO_IDENTIDAD\" o \"DOC_IDENTIDAD\" se consideran equivalentes a \"DNI\".\n- \"NOMBRE\" se considera equivalente a \"APELLIDO\" (ambos son datos personales de tipo identificador).\n- \"CIUDAD\" o \"LOCALIDAD\" se consideran equivalentes a \"DIRECCION\".\n\n---\n\n### 🔹 REGLAS ESTRICTAS\n\n1. Conceptos conocidos (comparación literal con esta lista JSON):  \n${JSON.stringify(conceptos)}\n\n   Descripciones correspondientes:  \n${JSON.stringify(conceptosDesc)}\n\n   - Si el valor no coincide **exactamente** con los conceptos conocidos ni con las equivalencias permitidas, marca \"nuevo_concepto\": true.\n   - Si coincide con un alias de las equivalencias permitidas, marca \"nuevo_concepto\": false.\n   - No inventes nombres ni sinónimos adicionales.\n   - No infieras significados.\n\n2. Sensibilidad:\n   - Identificadores únicos (DNI, CUIL, CUIT, PASAPORTE) → PII_ALTA\n   - Datos financieros (TARJETA) → PII_ALTA\n   - Datos de contacto (EMAIL, TELEFONO, DIRECCION, CIUDAD, LOCALIDAD) → PII_MEDIA\n   - Otros datos personales (APELLIDO, NOMBRE) → PII_BAJA\n\n3. Método de anonimización:\n   - Identificadores únicos → HASH_MD5\n   - Email → MASCARA_DOMINIO\n   - Datos financieros → MASCARA_ULTIMOS_4\n   - Si no requiere anonimización → NINGUNO\n\n4. Si ninguna columna es sensible, devuelve exactamente: []\n\n5. Responde solo con el JSON válido (sin comentarios, sin explicaciones, sin bloques de código).\n`;\n\nreturn [{\n  json: {\n    prompt_base: promptBase,\n    conceptos,\n    metodosAnon,\n    empleados,\n    normativa\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5696,
+        -400
+      ],
+      "id": "524a8602-264c-4e41-8dea-9c3fee757938",
+      "name": "Pront1"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        6256,
+        128
+      ],
+      "id": "3411a32c-b5bd-4b8d-97f2-877befa62b7b",
+      "name": "Merge6"
+    },
+    {
+      "parameters": {
+        "jsCode": "let salida = [];\n\n// 1. Procesar respuesta del LLM\nconst llmItem = items.find(i => i.json.content);\nif (llmItem) {\n  const rawText = llmItem.json.content.parts[0].text;\n  // Elimina ```json y ``` si existen\n  const cleanText = rawText.replace(/```json|```/g, '').trim();\n  try {\n    const llmData = JSON.parse(cleanText);\n    llmData.forEach(d => {\n      salida.push({\n        TABLE_NAME: d.tabla,\n        ESQUEMA: d.esquema,\n        COLUMN_NAME: d.columna,\n        concepto_sensible_detectado: d.concepto,\n        descripcion_concepto: d.descripcion_concepto,\n        nuevo_concepto: d.nuevo_concepto === true ? true : false,\n        sensibilidad: d.sensibilidad,\n        usuario_creador: d.usuario_creador,\n        metodo_anomizacion: d.metodo_anonimizacion,\n        normativa: d.normativa\n      });\n    });\n  } catch (e) {\n    console.error(\"Error parseando LLM:\", e);\n  }\n}\n\n// 2. Procesar resultados del match exacto/parcial\nitems.forEach(i => {\n  if (i.json.TABLE_NAME && i.json.COLUMN_NAME) {\n    if (i.json.concepto_sensible_detectado) {\n      salida.push({\n        TABLE_NAME: i.json.TABLE_NAME,\n        ESQUEMA: i.json.esquema,\n        COLUMN_NAME: i.json.COLUMN_NAME,\n        concepto_sensible_detectado: i.json.concepto_sensible_detectado,\n        nuevo_concepto: false\n      });\n    }\n  }\n});\n\nreturn salida.map(s => ({ json: s }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        7408,
+        128
+      ],
+      "id": "9f84244a-c343-4350-b1f1-3dfe1b574c16",
+      "name": "Normalizar Datos Sensibles1",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        6912,
+        128
+      ],
+      "id": "9f5194d6-558b-4d47-8475-58de7d2f2cd5",
+      "name": "Wait2",
+      "webhookId": "bb685f40-b99a-447a-93c3-5a19e785b1a1"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "b26cbab8-8d09-40ac-91da-572529a022e0",
+              "leftValue": "={{ $json.nuevo_concepto }}",
+              "rightValue": "false",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        8352,
+        144
+      ],
+      "id": "a841ef3d-826b-405c-b95e-cc0c820b3af9",
+      "name": "new Concept?1"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO AR_PROD_HUB_EXT.MAE_CONCEPTO_SENSIBLE\n(concepto_id, nombre_concepto, sensibilidad_id, propietario_id, metodo_anon_id, normativa_aplicable,Lote_Carga) VALUES\n(UPPER(TRIM('{{ $json.concepto_sensible_detectado }}')), UPPER(TRIM('{{ $json.descripcion_concepto }}')), UPPER(TRIM('{{ $json.sensibilidad }}')) ,{{ $json.usuario_creador }}, UPPER(TRIM('{{ $json.metodo_anomizacion }}')),UPPER(TRIM('{{ $json.normativa }}')),(CURRENT_TIMESTAMP - INTERVAL 3 HOUR));",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        8720,
+        128
+      ],
+      "id": "0b8ed3ce-1336-44a1-b70b-7ebca78501cd",
+      "name": "InsertMAE_CONCEPTO_SENSIBLE1",
+      "credentials": {
+        "mySql": {
+          "id": "BfJia1e8Kpe50g9Z",
+          "name": "EXT"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "insert into AR_PROD_HUB_EXT.MAE_CATALOGO_DATOS\n(nombre_campo, tabla_origen, concepto_id,lote_carga,lote_actualizacion,esquema) VALUES\n(UPPER(TRIM('{{ $('new Concept?1').item.json.COLUMN_NAME }}')),UPPER(TRIM('{{ $('new Concept?1').item.json.TABLE_NAME }}')),UPPER(TRIM('{{ $('new Concept?1').item.json.concepto_sensible_detectado }}')),(CURRENT_TIMESTAMP - INTERVAL 3 HOUR),(CURRENT_TIMESTAMP - INTERVAL 3 HOUR),UPPER(TRIM('{{ $('new Concept?1').item.json.ESQUEMA }}')))",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        9392,
+        336
+      ],
+      "id": "64fe2b81-f76b-4ed0-a903-41094bd11e03",
+      "name": "InsertMaeCatalogo2",
+      "credentials": {
+        "mySql": {
+          "id": "BfJia1e8Kpe50g9Z",
+          "name": "EXT"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select sensibilidad_id,descripcion_corta  from AR_PROD_HUB_EXT.MAE_SENSIBILIDAD;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        4976,
+        -320
+      ],
+      "id": "7ace09fd-6027-4dee-81fc-cf8415c6c2e1",
+      "name": "SELECT_MAE_SENSIBILIDAD1",
+      "credentials": {
+        "mySql": {
+          "id": "7QI3B35bYFcIbiuu",
+          "name": "DIM"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select upper(trim(concepto_id))as concepto_id , nombre_concepto  from AR_PROD_HUB_EXT.MAE_CONCEPTO_SENSIBLE;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        4976,
+        -96
+      ],
+      "id": "c9792229-d49c-4648-bd07-79e59a8b8f4f",
+      "name": "SELECT_MAE_CONCEPTO_SENSIBLE1",
+      "credentials": {
+        "mySql": {
+          "id": "7QI3B35bYFcIbiuu",
+          "name": "DIM"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select EMPLEADO_ID  from AR_PROD_HUB_EXT.DIM_EMPLEADO;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        4992,
+        -528
+      ],
+      "id": "6466380e-b8fd-4a3b-b104-02fbac0f88cf",
+      "name": "SELECT_D_Empleado1",
+      "credentials": {
+        "mySql": {
+          "id": "7QI3B35bYFcIbiuu",
+          "name": "DIM"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select metodo_anon_id,descripcion  from AR_PROD_HUB_EXT.CAT_METODO_ANON;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        4992,
+        -720
+      ],
+      "id": "9bfc717f-88a3-453e-8a45-79d6be952d6f",
+      "name": "SELECT_CAT_METODO_ANON1",
+      "credentials": {
+        "mySql": {
+          "id": "7QI3B35bYFcIbiuu",
+          "name": "DIM"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        5232,
+        -272
+      ],
+      "id": "a90c5b1e-605c-4028-84e5-3e7fe3185f75",
+      "name": "Merge7"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        5264,
+        -576
+      ],
+      "id": "1a146397-2ea7-4d5a-8855-ec2c67a20ea8",
+      "name": "Merge8"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        5456,
+        -400
+      ],
+      "id": "1650a7ae-0e20-45b3-a082-656b1df952ba",
+      "name": "Merge9"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select count(*) as cantidad from AR_PROD_HUB_EXT.MAE_CATALOGO_DATOS\nwhere nombre_campo = '{{ $json.COLUMN_NAME }}' and tabla_origen = '{{ $json.TABLE_NAME }}' and concepto_id = '{{ $json.concepto_sensible_detectado }}' AND esquema = '{{ $json.TABLE_SCHEMA }}'",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        5856,
+        544
+      ],
+      "id": "a6f34c22-b7e8-47ca-9793-1471ae6540af",
+      "name": "Select Mae_Catalogo3",
+      "alwaysOutputData": true,
+      "notesInFlow": false,
+      "credentials": {
+        "mySql": {
+          "id": "BfJia1e8Kpe50g9Z",
+          "name": "EXT"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "insert into AR_PROD_HUB_EXT.MAE_CATALOGO_DATOS\n(nombre_campo, tabla_origen, concepto_id,lote_carga,lote_actualizacion,esquema) VALUES\n('{{ $('ColumnasSensiblesMacht?1').item.json.COLUMN_NAME }}','{{ $('ColumnasSensiblesMacht?1').item.json.TABLE_NAME }}','{{ $('ColumnasSensiblesMacht?1').item.json.concepto_sensible_detectado }}',(CURRENT_TIMESTAMP - INTERVAL 3 HOUR),(CURRENT_TIMESTAMP - INTERVAL 3 HOUR),upper(trim('{{ $('ColumnasSensiblesMacht?1').item.json.TABLE_SCHEMA }}')));",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        6624,
+        544
+      ],
+      "id": "829b8f6f-b66f-407b-8487-2c0a4ea5eb33",
+      "name": "InsertMaeCatalogo3",
+      "alwaysOutputData": true,
+      "credentials": {
+        "mySql": {
+          "id": "BfJia1e8Kpe50g9Z",
+          "name": "EXT"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "8b5c73cc-2a2b-44b1-ab90-51f3103feedb",
+              "leftValue": "={{ $json.concepto_detectado_fl }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        5616,
+        464
+      ],
+      "id": "d37f3e90-2ffb-431d-8fc4-1a0bf101b940",
+      "name": "ColumnasSensiblesMacht?1",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "0ceb8370-0f80-48d6-ad56-24562bf33237",
+              "leftValue": "={{ $json.cantidad }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.2,
+      "position": [
+        6080,
+        544
+      ],
+      "id": "ede03519-803a-4888-99ec-a0ac5f4f8979",
+      "name": "Filter1",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        5808,
+        304
+      ],
+      "id": "fb00b6a8-a0f9-4805-9f15-2dba8045f653",
+      "name": "Merge10",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        8032,
+        80
+      ],
+      "id": "2e8e9bd7-65fc-4f3b-ac66-800132610eea",
+      "name": "Loop Over Items",
+      "alwaysOutputData": true,
+      "executeOnce": false,
+      "retryOnFail": false,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        4176,
+        -176
+      ],
+      "id": "66e5d5e3-9759-40da-9554-172af2d957e8",
+      "name": "When Executed by Another Workflow",
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{\n  json: {\n    status: \"ok\",\n    message: \"Workflow secundario finalizado correctamente\"\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        8352,
+        -32
+      ],
+      "id": "074f6f23-0fea-4f8e-8ee8-6ed9eb160d73",
+      "name": "Exit"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "1ff6fc35-ca04-45c5-9e07-2afadfe90a2e",
+              "leftValue": "={{ $items()[0].json}}",
+              "rightValue": "",
+              "operator": {
+                "type": "object",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        4752,
+        384
+      ],
+      "id": "7df21bf9-b440-41ed-adc5-c79838b997a5",
+      "name": "IfEmpty1",
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{\n  json: {\n    status: \"Sin Datos\",\n    message: \"Workflow secundario finalizado correctamente\"\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        7456,
+        848
+      ],
+      "id": "862bf026-51e0-44e8-b208-d90c38913eff",
+      "name": "Exit2"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "1ff6fc35-ca04-45c5-9e07-2afadfe90a2e",
+              "leftValue": "={{ $items()[0].json}}",
+              "rightValue": "",
+              "operator": {
+                "type": "object",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        7584,
+        128
+      ],
+      "id": "ae087ec7-8ab5-43d1-905d-22a39fd929a7",
+      "name": "IfEmpty",
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{\n  json: {\n    status: \"Sin Datos\",\n    message: \"Workflow secundario finalizado correctamente\"\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        7792,
+        272
+      ],
+      "id": "27002a7e-7a35-4684-94c2-0716f4fcd9d3",
+      "name": "Exit3"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "1ff6fc35-ca04-45c5-9e07-2afadfe90a2e",
+              "leftValue": "={{ $items()[0].json}}",
+              "rightValue": "",
+              "operator": {
+                "type": "object",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        6656,
+        128
+      ],
+      "id": "f95e0e55-7523-4624-9b9d-18617f394070",
+      "name": "IfEmpty2",
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        4560,
+        384
+      ],
+      "id": "bf989d0d-ee8a-4e50-a9ab-75b24d3e1eb8",
+      "name": "Wait",
+      "webhookId": "6cdfbf92-b4a1-4748-be08-cd00c88980d9"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{\n  json: {\n    status: \"Sin Datos\",\n    message: \"Workflow secundario finalizado correctamente\"\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5024,
+        528
+      ],
+      "id": "1948e7b2-dc8f-4539-a8ac-1855f4b60e2e",
+      "name": "Exit4"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select count(*) as cantidad from AR_PROD_HUB_EXT.MAE_CATALOGO_DATOS\nwhere nombre_campo = '{{ $json.COLUMN_NAME }}' and tabla_origen = '{{ $json.TABLE_NAME }}' and concepto_id = '{{ $json.concepto_sensible_detectado }}' AND esquema = '{{ $json.TABLE_SCHEMA }}'",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        8912,
+        336
+      ],
+      "id": "cc5ffecd-1c00-4db6-a4d9-7a6f4387a2e2",
+      "name": "Select Mae_Catalogo",
+      "alwaysOutputData": true,
+      "notesInFlow": false,
+      "credentials": {
+        "mySql": {
+          "id": "BfJia1e8Kpe50g9Z",
+          "name": "EXT"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "0ceb8370-0f80-48d6-ad56-24562bf33237",
+              "leftValue": "={{ $json.cantidad }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.2,
+      "position": [
+        9152,
+        336
+      ],
+      "id": "31108ca4-977e-4ce3-843b-2c616a7536ad",
+      "name": "Filter",
+      "alwaysOutputData": true
+    }
+  ],
+  "pinData": {
+    "When Executed by Another Workflow": [
+      {
+        "json": {
+          "database": "AR_PROD_HUB_DIM",
+          "table": "CLIENTES"
+        }
+      }
+    ]
+  },
+  "connections": {
+    "CrearProntSiTengoDatos": {
+      "main": [
+        [
+          {
+            "node": "IfEmpty2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Novedades1": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Columns Sensibility1": {
+      "main": [
+        [
+          {
+            "node": "ColumnasSensiblesMacht?1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Muestreo1": {
+      "main": [
+        [
+          {
+            "node": "Merge10",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript2": {
+      "main": [
+        [
+          {
+            "node": "Merge6",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Message a model1": {
+      "main": [
+        [
+          {
+            "node": "Normalizar Datos Sensibles1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pront1": {
+      "main": [
+        [
+          {
+            "node": "Merge6",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge6": {
+      "main": [
+        [
+          {
+            "node": "CrearProntSiTengoDatos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar Datos Sensibles1": {
+      "main": [
+        [
+          {
+            "node": "IfEmpty",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait2": {
+      "main": [
+        [
+          {
+            "node": "Message a model1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "new Concept?1": {
+      "main": [
+        [
+          {
+            "node": "InsertMAE_CONCEPTO_SENSIBLE1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Select Mae_Catalogo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "InsertMAE_CONCEPTO_SENSIBLE1": {
+      "main": [
+        [
+          {
+            "node": "Select Mae_Catalogo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "InsertMaeCatalogo2": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SELECT_MAE_SENSIBILIDAD1": {
+      "main": [
+        [
+          {
+            "node": "Merge7",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SELECT_MAE_CONCEPTO_SENSIBLE1": {
+      "main": [
+        [
+          {
+            "node": "Merge7",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "SELECT_D_Empleado1": {
+      "main": [
+        [
+          {
+            "node": "Merge8",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "SELECT_CAT_METODO_ANON1": {
+      "main": [
+        [
+          {
+            "node": "Merge8",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge7": {
+      "main": [
+        [
+          {
+            "node": "Merge9",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge8": {
+      "main": [
+        [
+          {
+            "node": "Merge9",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge9": {
+      "main": [
+        [
+          {
+            "node": "Pront1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select Mae_Catalogo3": {
+      "main": [
+        [
+          {
+            "node": "Filter1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ColumnasSensiblesMacht?1": {
+      "main": [
+        [
+          {
+            "node": "Merge10",
+            "type": "main",
+            "index": 1
+          }
+        ],
+        [
+          {
+            "node": "Select Mae_Catalogo3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter1": {
+      "main": [
+        [
+          {
+            "node": "InsertMaeCatalogo3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge10": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [
+          {
+            "node": "Exit",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "new Concept?1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "SELECT_CAT_METODO_ANON1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "SELECT_D_Empleado1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "SELECT_MAE_SENSIBILIDAD1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "SELECT_MAE_CONCEPTO_SENSIBLE1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Novedades1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Exit": {
+      "main": [
+        []
+      ]
+    },
+    "IfEmpty1": {
+      "main": [
+        [
+          {
+            "node": "Muestreo1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Columns Sensibility1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Exit4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IfEmpty": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Exit3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IfEmpty2": {
+      "main": [
+        [
+          {
+            "node": "Wait2",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Exit2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "IfEmpty1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select Mae_Catalogo": {
+      "main": [
+        [
+          {
+            "node": "Filter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter": {
+      "main": [
+        [
+          {
+            "node": "InsertMaeCatalogo2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "26d7120a-1999-4dd2-813d-bfa1c8ddacd3",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "0feb5d978d957d41e1206120cb54fa0c77a4c9e3b092394490215f6a0361b720"
+  },
+  "id": "DWpsULRlnG06VRXL",
+  "tags": []
+}

@@ -1,0 +1,356 @@
+{
+  "name": "Databases",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -688,
+        -112
+      ],
+      "id": "7a9902b8-b9a1-430c-a550-090d08569cae",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -224,
+        -112
+      ],
+      "id": "cfc07fad-1f37-456a-8525-3f016b5024b4",
+      "name": "Loop Over Items",
+      "alwaysOutputData": true,
+      "retryOnFail": false,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n    t.TABLE_SCHEMA AS `database`,\n    t.TABLE_NAME AS `table`,\n    t.CREATE_TIME\nFROM \n    information_schema.TABLES t\nLEFT JOIN (\n    SELECT \n        esquema, \n        tabla, \n        fecha_ultimo_analisis\n    FROM AR_PROD_HUB_LOG.tablaAnalizada\n) tab \n    ON tab.esquema = t.TABLE_SCHEMA \n    AND tab.tabla = t.TABLE_NAME\nWHERE \n    t.TABLE_SCHEMA IN ('AR_PROD_HUB_DIM','AR_PROD_HUB_EXT','AR_PROD_HUB_LOG')\n    AND (\n        tab.fecha_ultimo_analisis IS NULL  -- nunca analizadas\n        OR tab.fecha_ultimo_analisis < CURDATE() - INTERVAL 10 DAY -- analizadas hace 10+ días\n    )\nORDER BY \n    t.CREATE_TIME DESC;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        -464,
+        -112
+      ],
+      "id": "2a414b3c-4929-48f1-8e79-4809fbfc531c",
+      "name": "ListadoTablasAnalizar",
+      "credentials": {
+        "mySql": {
+          "id": "BfJia1e8Kpe50g9Z",
+          "name": "EXT"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO AR_PROD_HUB_LOG.tablaAnalizada (esquema, tabla, fecha_ultimo_analisis,lote_carga,lote_actualizacion) VALUES ('{{ $('Loop Over Items').item.json.database }}', '{{ $('Loop Over Items').item.json.table }}', CURDATE(), (CURRENT_TIMESTAMP - INTERVAL 3 HOUR) ,(CURRENT_TIMESTAMP - INTERVAL 3 HOUR) );\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        784,
+        32
+      ],
+      "id": "df79ff18-1e35-4ab4-baa9-5cf9f7f02603",
+      "name": "InsertTablaAnalizada",
+      "credentials": {
+        "mySql": {
+          "id": "BfJia1e8Kpe50g9Z",
+          "name": "EXT"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "DWpsULRlnG06VRXL",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/DWpsULRlnG06VRXL",
+          "cachedResultName": "RegistrosAndDeteccionDatosSensbibles"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": true,
+          "convertFieldsToString": true
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        64,
+        -96
+      ],
+      "id": "3fa882d8-0d71-4955-bf25-2467b29c505e",
+      "name": "RegistroAndDeteccionDatosSensbibles",
+      "alwaysOutputData": false,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const item = $input.item;\n\nreturn {\n  json: {\n    table: $('Loop Over Items').item.json.table,\n    database: $('Loop Over Items').item.json.database\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1088,
+        -96
+      ],
+      "id": "1da7e80d-e344-4e9c-b70f-c597a5d737ed",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "xq9tt7CqrCHhk0ju",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/xq9tt7CqrCHhk0ju",
+          "cachedResultName": "CreateView"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {}
+        },
+        "mode": "each",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        1392,
+        64
+      ],
+      "id": "8e21363e-a592-4fd6-8dbc-bb682c5b8b7a",
+      "name": "Call 'CreateView'"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "f69dc7aa-d904-4ff8-9318-a9c407f94f3f",
+              "leftValue": "={{ $json.cantidad }}",
+              "rightValue": 1,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        528,
+        -96
+      ],
+      "id": "2d287c67-29f7-49e6-b251-8120730532f0",
+      "name": "Update?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "update AR_PROD_HUB_LOG.tablaAnalizada\nset  fecha_ultimo_analisis = CURDATE(),\n      lote_Actualizacion = (CURRENT_TIMESTAMP - INTERVAL 3 HOUR) \nwhere esquema = '{{ $('Loop Over Items').item.json.database }}' and tabla = '{{ $('Loop Over Items').item.json.table }}';",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        784,
+        -192
+      ],
+      "id": "f8dd4748-b511-431b-a8ac-6ecf08c5fd94",
+      "name": "updateTablaAnalizada",
+      "credentials": {
+        "mySql": {
+          "id": "BfJia1e8Kpe50g9Z",
+          "name": "EXT"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select count(*) as cantidad from AR_PROD_HUB_LOG.tablaAnalizada\nwhere tabla = '{{ $('Loop Over Items').item.json.table }}' and esquema = '{{ $('Loop Over Items').item.json.database }}';\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.5,
+      "position": [
+        320,
+        -96
+      ],
+      "id": "fc75ce36-637f-4a01-8ad1-a34f2809c126",
+      "name": "Select tablaAnalizada",
+      "alwaysOutputData": true,
+      "notesInFlow": false,
+      "credentials": {
+        "mySql": {
+          "id": "BfJia1e8Kpe50g9Z",
+          "name": "EXT"
+        }
+      },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "ListadoTablasAnalizar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [],
+        [
+          {
+            "node": "RegistroAndDeteccionDatosSensbibles",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ListadoTablasAnalizar": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "InsertTablaAnalizada": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RegistroAndDeteccionDatosSensbibles": {
+      "main": [
+        [
+          {
+            "node": "Select tablaAnalizada",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Call 'CreateView'",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call 'CreateView'": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update?": {
+      "main": [
+        [
+          {
+            "node": "updateTablaAnalizada",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "InsertTablaAnalizada",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "updateTablaAnalizada": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select tablaAnalizada": {
+      "main": [
+        [
+          {
+            "node": "Update?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "0da55f04-1e8a-41ae-bc33-e55de6f9a68b",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "0feb5d978d957d41e1206120cb54fa0c77a4c9e3b092394490215f6a0361b720"
+  },
+  "id": "qHctjcL7zXqgJZMJ",
+  "tags": []
+}

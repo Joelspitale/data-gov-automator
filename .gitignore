@@ -1,0 +1,10 @@
+# Ignorar datos de volúmenes docker
+n8n_data/
+mysql_data/
+
+# Ignorar variables de entorno
+.env
+
+# Archivos de sistema
+.DS_Store
+Thumbs.db

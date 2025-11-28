@@ -1,0 +1,46 @@
+services:
+  mysql:
+    container_name: mysql
+    image: mysql:8.0
+    environment:
+      # ¡Mejor práctica! Mueve esto a un archivo .env
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      MYSQL_DATABASE: AR_PROD_HUB_DIM
+    ports:
+      - "3308:3306"
+    volumes:
+      - ./mysql_data:/var/lib/mysql
+      - ./sql:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-proot"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: always
+
+  n8n:
+    # ¡Mejor práctica! Fija la versión en lugar de usar 'latest' implícito
+    image: n8nio/n8n:1.118.0 
+    container_name: n8n
+    ports:
+      - '5678:5678'
+    volumes:
+      - ./n8n_data:/home/node/.n8n
+      - ./workflows:/data/workflows
+    environment:
+      - N8N_HOST=${N8N_HOST}
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - WEBHOOK_URL=http://${N8N_HOST}:5678/
+      - N8N_METRICS_ON_STARTUP=false
+      - TZ=America/Argentina/Cordoba
+      - GOOGLE_GEMINI_API_KEY=${GOOGLE_GEMINI_API_KEY}
+      
+    restart: always
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+networks:
+  default:
+    name: n8n_network
